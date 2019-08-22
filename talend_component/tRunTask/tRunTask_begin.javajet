@@ -33,7 +33,7 @@
 	String waitUntilFinished = ElementParameterParser.getValue(node, "__WAIT_UNTIL_FINISHED_CHECK_CYCLE__");
 	boolean checkTaskRunning = "true".equals(ElementParameterParser.getValue(node, "__CHECK_TASK_NOT_RUNNING_SIMULTANEOUSLY__"));
 	@SuppressWarnings("unchecked")
-	List<Map<String, String>> listTasks = (List<Map<String,String>>) ElementParameterParser.getObjectValue(node, "__TASK_NOT_RUNNING_SIMULTANEOUSLY__");
+	List<Map<String, String>> listTasks = (List<Map<String,String>>) ElementParameterParser.getObjectValue(node, (useTaskName ? "__TASK_NOT_RUNNING_SIMULTANEOUSLY__" : "__TASK_NOT_RUNNING_SIMULTANEOUSLY_IDS__"));
 	boolean waitForTaskEnd = "true".equals(ElementParameterParser.getValue(node, "__WAIT_UNTIL_END__"));
 	boolean allowPreparing = "true".equals(ElementParameterParser.getValue(node, "__ALLOW_GENERATING__"));
 	String maxRepetitions = ElementParameterParser.getValue(node, "__MAX_REPETITION__");
@@ -141,15 +141,16 @@
 				status.setDebug(<%=debug%>);
 				try {
 					boolean wait = true;
-					boolean firstLoop = true;
+					java.util.HashMap<String, Boolean> firstLoop = new java.util.HashMap<String, Boolean>();
+					firstLoop.put(taskId_<%=cid%>, true);
 					while (wait) {
 						wait = false;
 						// Check if this task is not currently running
 						status.setTaskId(taskId_<%=cid%>);
 						status.execute();
 						if (status.isRunning() || status.isReadyToRun() == false) {
-							if (firstLoop) {
-								firstLoop = false;
+							if (firstLoop.get(taskId_<%=cid%>)) {
+								firstLoop.put(taskId_<%=cid%>, false);
 								status.info("Task " + label_<%=cid%> + ": Own task is currently started or running or not ready. Wait for end of current processing.");
 							}
 							wait = true;
@@ -158,20 +159,42 @@
 						}
 						Thread.sleep(100); // wait a bit to avoid over running the TAC
 						// wait for possible more tasks
+						String taskToWaitId = null;
+						String taskToWaitLabel = null;
 <%			for (Map<String, String> taskMap : listTasks) {
-					String taskToWait = taskMap.get("TASK_NAME");
+					String taskToWait = (useTaskName ? taskMap.get("TASK_NAME") : taskMap.get("TASK_ID"));
 					if (taskToWait != null && taskToWait.trim().isEmpty() == false) {
 						taskToWait = taskToWait.replace('\"',' ').trim(); %>
-						status.setTaskId(taskIdByName.getTaskId("<%=taskToWait%>"));
+					// by BG @ FLE
+<%					if (useTaskName) { %>
+						try {
+							taskToWaitId = taskIdByName.getTaskId("<%=taskToWait%>");
+							taskIdByName.info("Task " + <%=taskToWait%> + ": has id: " + taskToWaitId);
+						} catch (Exception e) {
+							globalMap.put("<%=cid%>_ERROR_MESSAGE", "Retrieve taskId failed: " + e.getMessage());
+							throw e;
+						}
+<%					} else { %>
+						taskToWaitId = String.valueOf(<%=taskToWait%>);
+<%					} %>
+						if (!firstLoop.containsKey(taskToWaitId)) {
+							firstLoop.put(taskToWaitId, true);
+						}
+						taskToWaitLabel = taskToWaitId;
+						status.setTaskId(taskToWaitId);
 						status.execute();
-						if (status.isRunning()) {
+						if (status.isRunning() || status.isReadyToRun() == false) {
+							if (firstLoop.get(taskToWaitId)) {
+								firstLoop.put(taskToWaitId, false);
+								status.info("Precondition task " + taskToWaitLabel + " is currently started or running. Wait for its end.");
+							}
 							wait = true;
 							Thread.sleep(1000);
 							continue; // one of the necessary task is currently running, no need to check another task
 						}
 						Thread.sleep(100); // wait a bit to avoid over running the TAC
 <%				} %>
-<%			}	%>
+<%			} // end for %>
 					} // end while
 					status.info("Task " + label_<%=cid%> + ": All precondition tasks are finished.");
 				} catch (Exception e) {
@@ -212,9 +235,9 @@
 			tes.setExecRequestId(runTask_<%=cid%>.getExecRequestId());
 			tes.execute();
 			// by MM @ FLE 2017-10-17
-			while (	!tes.getExecBasicStatus().equals("OK") &&
-				!tes.getExecBasicStatus().equals("ERROR") &&
-				!tes.getExecBasicStatus().equals("KILLED")) {
+			while (!tes.getExecBasicStatus().equals("OK")
+			    && !tes.getExecBasicStatus().equals("ERROR")
+			    && !tes.getExecBasicStatus().equals("KILLED")) {
 				if (tes.isPreparing()) {
 						System.out.println("Task is " + tes.getExecDetailedStatus());
 				}
